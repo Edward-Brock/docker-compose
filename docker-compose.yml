@@ -90,3 +90,53 @@ services:
       - TZ=Asia/Shanghai
     command:
       - --cleanup=true
+  
+  booop:
+    build:
+      context: /home/halon/projects/booop
+      dockerfile: Dockerfile
+    container_name: booop
+    restart: always
+    ports:
+      - "9000:3000"
+    environment:
+      NODE_ENV: production
+    env_file:
+      - /home/halon/projects/booop/.env
+  
+  minecraft:
+    image: itzg/minecraft-server
+    container_name: minecraft-server
+    restart: always
+    tty: true
+    stdin_open: true
+    ports:
+      - "25565:25565"
+    environment:
+      EULA: "TRUE"
+      MAX_PLAYERS: "8"
+      TZ: "Asia/Shanghai"
+      DIFFICULTY: "2"
+      ENABLE_COMMAND_BLOCK: "true"
+    volumes:
+      - $PWD/minecraft:/data
+
+  beszel:
+    image: henrygd/beszel
+    container_name: beszel
+    restart: always
+    ports:
+      - 8090:8090
+    volumes:
+      - $PWD/beszel:/beszel_data
+  
+  beszel-agent:
+    image: henrygd/beszel-agent
+    container_name: beszel-agent
+    restart: always
+    network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      PORT: 45876
+      KEY: 'KEY'
