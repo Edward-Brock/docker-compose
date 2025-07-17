@@ -1,101 +1,157 @@
+# 定义两个自定义网络，实现服务间的隔离
+networks:
+  backend:
+    driver: bridge  # 后端服务间通信网络
+  frontend:
+    driver: bridge  # 前端服务与外部通信网络
+
 services:
   nginx:
     image: nginx
     container_name: nginx
     restart: always
-    volumes:
-      - $PWD/nginx/nginx.conf:/etc/nginx/nginx.conf
-      - $PWD/nginx/conf.d:/etc/nginx/conf.d
-      - $PWD/nginx/ssl:/etc/nginx/ssl
-      - $PWD/nginx/html:/usr/share/nginx/html
-      - $PWD/nginx/log:/var/log/nginx
     ports:
       - "80:80"
       - "443:443"
+    volumes:
+      - ${ROOT_PATH}/nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ${ROOT_PATH}/nginx/conf.d:/etc/nginx/conf.d
+      - ${ROOT_PATH}/nginx/ssl:/etc/nginx/ssl
+      - ${ROOT_PATH}/nginx/html:/usr/share/nginx/html
+      - ${ROOT_PATH}/nginx/log:/var/log/nginx
     environment:
       - TZ=Asia/Shanghai
     labels:
       - sh.acme.autoload.domain=${CAME_SH_AUTOLOAD_DOMAIN}
+    networks:
+      - frontend
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   mysql:
     image: mysql
     container_name: mysql
     restart: always
+    expose:
+      - "3306"
     volumes:
-      - $PWD/mysql/conf.d:/etc/mysql/conf.d
-      - $PWD/mysql/data:/var/lib/mysql
-      - $PWD/mysql/log:/var/log/mysql
-    ports:
-      - "3306:3306"
+      - ${ROOT_PATH}/mysql/conf.d:/etc/mysql/conf.d
+      - ${ROOT_PATH}/mysql/data:/var/lib/mysql
+      - ${ROOT_PATH}/mysql/log:/var/log/mysql
     environment:
       - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
       - TZ=Asia/Shanghai
     command:
       - --lower_case_table_names=1
       - --sql_mode=STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:latest
     container_name: redis
     restart: always
-    ports:
-      - "6379:6379"
+    expose:
+      - "6379"
     volumes:
-      - $PWD/redis/dаta:/data
-      - $PWD/redis/redis.conf:/usr/local/etc/redis/redis.conf
+      - ${ROOT_PATH}/redis/data:/data
+      - ${ROOT_PATH}/redis/redis.conf:/usr/local/etc/redis/redis.conf
     command: redis-server /usr/local/etc/redis/redis.conf
-
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+  
   wordpress:
     image: wordpress:latest
     container_name: wordpress
     restart: always
-    ports:
-      - 8080:80
+    expose:
+      - "80"
     volumes:
-      - $PWD/wordpress:/var/www/html
+      - ${ROOT_PATH}/wordpress:/var/www/html
     environment:
-      - WORDPRESS_DB_NAME=wordpress
-      - WORDPRESS_DB_HOST=mysql
-      - WORDPRESS_DB_USER=wp_user
-      - WORDPRESS_DB_PASSWORD=!5@tN3@!76
+      - WORDPRESS_DB_NAME=${WORDPRESS_DB_NAME}
+      - WORDPRESS_DB_HOST=${WORDPRESS_DB_HOST}
+      - WORDPRESS_DB_USER=${WORDPRESS_DB_USER}
+      - WORDPRESS_DB_PASSWORD=${WORDPRESS_DB_PASSWORD}
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost/wp-login.php | grep -qE '2[0-9]{2}|3[0-9]{2}|403|404' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
     depends_on:
-      - nginx
-      - mysql
-
+      mysql:
+        condition: service_healthy
+  
   phpmyadmin:
     image: phpmyadmin
     container_name: phpmyadmin
     restart: always
-    ports:
-      - "3307:80"
+    expose:
+      - "80"
     environment:
-      - PMA_HOST=mysql
-      - PMA_POST=3306
       - TZ=Asia/Shanghai
+      - PMA_HOST=mysql
+      - PMA_PORT=3306
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-fsSL", "http://localhost"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     depends_on:
-      - mysql
+      mysql:
+        condition: service_healthy
 
   vaultwarden:
     image: vaultwarden/server
     container_name: vaultwarden
     restart: always
-    ports:
-    - "8090:80"
+    expose:
+    - "80"
     volumes:
-    - $PWD/vaultwarden:/data
+    - ${ROOT_PATH}/vaultwarden:/data
     environment:
     - DATABASE_URL=mysql://${VAULTWARDEN_DATABASE_USER}:${VAULTWARDEN_DATABASE_PASSWORD}@mysql/vaultwarden
     - ADMIN_TOKEN=${VAULTWARDEN_ADMIN_TOKEN}
     - RUST_BACKTRACE=1
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-fsSL", "http://localhost"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
     depends_on:
-      - mysql
+      mysql:
+        condition: service_healthy
 
   acme.sh:
     image: neilpang/acme.sh
     container_name: acme.sh
     restart: always
     volumes:
-      - $PWD/acme.sh:/acme.sh
+      - ${ROOT_PATH}/acme.sh:/acme.sh
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - DP_Id=${CAME_SH_DNSPOD_ID}
@@ -107,6 +163,8 @@ services:
       - DEPLOY_DOCKER_CONTAINER_FULLCHAIN_FILE="/etc/nginx/ssl/${CAME_SH_AUTOLOAD_DOMAIN}/fullchain.cer"
       - DEPLOY_DOCKER_CONTAINER_RELOAD_CMD="docker compose exec nginx nginx -s reload"
     command: daemon
+    networks:
+      - backend
 
   watchtower:
     image: containrrr/watchtower
@@ -118,7 +176,25 @@ services:
       - TZ=Asia/Shanghai
     command:
       - --cleanup=true
-
+    networks:
+      - backend
+  
+  navigation:
+    build:
+      context: /home/halon/projects/navigation
+      dockerfile: Dockerfile
+    container_name: navigation
+    restart: always
+    expose:
+      - "3000"
+    environment:
+      NODE_ENV: production
+    env_file:
+      - /home/halon/projects/navigation/.env
+    networks:
+      - frontend
+      - backend
+  
   minecraft:
     image: itzg/minecraft-server
     container_name: minecraft-server
@@ -128,30 +204,42 @@ services:
     ports:
       - "25565:25565"
     environment:
-      EULA: "TRUE"
-      MAX_PLAYERS: "8"
-      TZ: "Asia/Shanghai"
-      DIFFICULTY: "2"
-      ENABLE_COMMAND_BLOCK: "true"
+      - EULA=TRUE
+      - MAX_PLAYERS=8
+      - TZ=Asia/Shanghai
+      - DIFFICULTY=2
+      - ENABLE_COMMAND_BLOCK=true
     volumes:
-      - $PWD/minecraft:/data
+      - ${ROOT_PATH}/minecraft:/data
+    networks:
+      - backend
 
   beszel:
-    image: henrygd/beszel
+    image: henrygd/beszel:latest
     container_name: beszel
     restart: always
-    ports:
-      - 8090:8090
+    expose:
+      - "8090"
     volumes:
-      - $PWD/beszel:/beszel_data
-
+      - ${ROOT_PATH}/beszel:/beszel_data
+    healthcheck:
+      test: ['CMD', '/beszel', 'health', '--url', 'http://localhost:8090']
+      start_period: 5s
+      interval: 120s
+    networks:
+      - frontend
+  
   beszel-agent:
-    image: henrygd/beszel-agent
+    image: henrygd/beszel-agent:latest
     container_name: beszel-agent
     restart: always
     network_mode: host
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ['CMD', '/agent', 'health']
+      start_period: 5s
+      interval: 120s
     environment:
       PORT: 45876
       KEY: 'KEY'
